@@ -1,0 +1,26 @@
+import os
+import urllib.parse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+
+TOKEN = os.getenv("TOKEN")
+WHATSAPP_NUMBER = "249911719837"
+MENU = {"🍔 برجر": "4500", "🌯 شاورما": "3800", "🥤 بيبسي": "1200"}
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(f"{i} - {p} جنيه", callback_data=i)] for i,p in MENU.items()]
+    keyboard.append([InlineKeyboardButton("📱 اطلب عبر واتساب", url=f"https://wa.me/{WHATSAPP_NUMBER}")])
+    await update.message.reply_text("🍔 أهلاً بيك في كافيهنا", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    item = query.data
+    msg = urllib.parse.quote(f"السلام عليكم، داير {item} بسعر {MENU[item]}")
+    link = f"https://wa.me/{WHATSAPP_NUMBER}?text={msg}"
+    await query.edit_message_text(f"تم: {item}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📱 أرسل واتساب", url=link)]]))
+
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
+    app.run_polling()
