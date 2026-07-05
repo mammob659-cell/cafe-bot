@@ -3,7 +3,7 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.getenv("TOKEN")
@@ -18,71 +18,84 @@ def run_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(('0.0.0.0', port), Handler).serve_forever()
 
-# ده عشان نخزن طلب الزبون
-user_orders = {}
+# بنخزن سلة كل زول براهو
+carts = {}
+
+# المنيو مقسمة
+MENU = {
+    "مشروبات ساخنة": {
+        "قهوة سادة": 2000, "قهوة تركية": 2500, "كابتشينو": 3500, "لاتيه": 3500
+    },
+    "عصائر": {
+        "مانجا": 2500, "جوافة": 2500, "موهيتو": 3500, "ايس كوفي": 4000
+    },
+    "وجبات": {
+        "شاورما": 4000, "برجر لحم": 5000, "برجر دجاج": 5000, "بيتزا": 6000, "بطاطس": 2500
+    },
+    "حلويات": {
+        "كيكة شوكولاتة": 2500, "تشيز كيك": 3500, "وافل": 4000
+    }
+}
+
+def get_main_menu():
+    keyboard = []
+    for category in MENU.keys():
+        keyboard.append([InlineKeyboardButton(f"🍽️ {category}", callback_data=f"cat_{category}")])
+    keyboard.append([InlineKeyboardButton("🛒 السلة", callback_data="cart")])
+    return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📋 شوف المنيو", callback_data='menu')],
-        [InlineKeyboardButton("🛒 اطلب الان", callback_data='order')],
-        [InlineKeyboardButton("📍 موقعنا", callback_data='location')]
-    ]
+    carts[update.effective_user.id] = {}
     await update.message.reply_text(
-        'مرحباً بيك في *كافيه مزاج* ☕\nاختار من تحت:',
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        'مرحباً بيك في *كافيه مزاج* ☕\nاختار القسم العايزو:',
+        reply_markup=get_main_menu(),
         parse_mode='Markdown'
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
 
-    if query.data == 'menu':
-        menu_text = """
-☕ *منيو كافيه مزاج* ☕
-*مشروبات ساخنة*
-قهوة سادة - 2,000 ج
-كابتشينو - 3,500 ج
-*عصائر*
-مانجا - 2,500 ج
-موهيتو - 3,500 ج
-*وجبات*
-شاورما - 4,000 ج
-برجر - 5,000 ج
+    if query.data.startswith("cat_"):
+        category = query.data.split("_", 1)[1]
+        keyboard = []
+        for item, price in MENU[category].items():
+            keyboard.append([InlineKeyboardButton(f"{item} - {price:,} ج", callback_data=f"add_{category}_{item}")])
+        keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="back")])
+        await query.edit_message_text(f"*{category}*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-اضغط "اطلب الان" عشان تطلب
-        """
-        await query.edit_message_text(menu_text, parse_mode='Markdown')
+    elif query.data.startswith("add_"):
+        _, category, item = query.data.split("_", 2)
+        if user_id not in carts: carts[user_id] = {}
+        carts[user_id][item] = carts[user_id].get(item, 0) + 1
+        await query.answer(f"تم اضافة {item} للسلة ✅")
 
-    elif query.data == 'order':
-        keyboard = [
-            [InlineKeyboardButton("قهوة سادة", callback_data='add_قهوة سادة')],
-            [InlineKeyboardButton("كابتشينو", callback_data='add_كابتشينو')],
-            [InlineKeyboardButton("شاورما", callback_data='add_شاورما')],
-            [InlineKeyboardButton("برجر", callback_data='add_برجر')],
-            [InlineKeyboardButton("✅ تم الطلب", callback_data='done')]
-        ]
-        user_orders[query.from_user.id] = []
-        await query.edit_message_text('اختار من المنيو:', reply_markup=InlineKeyboardMarkup(keyboard))
+    elif query.data == "cart":
+        if not carts.get(user_id):
+            await query.edit_message_text("السلة فاضية 😅", reply_markup=get_main_menu())
+            return
+        text = "*سلة الطلبات:*\n"
+        total = 0
+        for item, qty in carts[user_id].items():
+            price = next((p for cat in MENU.values() for i,p in cat.items() if i==item), 0)
+            text += f"- {item} x{qty} = {price*qty:,} ج\n"
+            total += price*qty
+        text += f"\n*الاجمالي: {total:,} ج*"
+        keyboard = [[InlineKeyboardButton("✅ تأكيد الطلب", callback_data="checkout")], [InlineKeyboardButton("⬅️ رجوع", callback_data="back")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-    elif query.data.startswith('add_'):
-        item = query.data.split('_')[1]
-        user_orders[query.from_user.id].append(item)
-        await query.answer(f"تم اضافة {item} ✅")
+    elif query.data == "checkout":
+        await query.edit_message_text("تمام 👌 رسل لينا:\nالاسم\nرقم التلفون\nالعنوان\nوح نتصل عليك نأكد الطلب")
+        carts[user_id] = {}
 
-    elif query.data == 'done':
-        order_list = "\n".join(user_orders.get(query.from_user.id, []))
-        await query.edit_message_text(f'طلبك:\n{order_list}\n\nرسل لينا رقمك عشان نتواصل معاك')
-        user_orders[query.from_user.id] = []
-
-async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('📍 امدرمان - شارع الوادي جنب استاد الهلال\n⏰ من 8 صباح ل 12 مساء')
+    elif query.data == "back":
+        await query.edit_message_text('اختار القسم العايزو:', reply_markup=get_main_menu())
 
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("location", location))
     app.add_handler(CallbackQueryHandler(button_handler))
     print("Bot is running...")
     app.run_polling()
