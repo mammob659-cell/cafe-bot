@@ -1,4 +1,13 @@
-import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+...
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(('0.0.0.0', port), Handler).serve_forever()
+
+if __name__ == "__main__":
+    threading.Thread(target=run_server, daemon=True).start() # السطر ده مهم
+    app.run_polling()import os
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
